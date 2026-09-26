@@ -29,7 +29,7 @@ const PAGE_TIMEOUT_MS = Number(process.env.PAGE_TIMEOUT_MS || 60000);
 const PAGE_WARMUP_MS = Number(process.env.PAGE_WARMUP_MS || 3000);
 const AUTO_START = String(process.env.AUTO_START || 'false').toLowerCase() === 'true';
 const DELETE_LOCAL_AFTER_UPLOAD = String(process.env.DELETE_LOCAL_AFTER_UPLOAD || 'false').toLowerCase() === 'true';
-const APP_VERSION = '20.8.1';
+const APP_VERSION = '20.9.0';
 const B2_PREFIX = 'recordings/';
 
 const QUALITY_PRESETS = Object.freeze({
@@ -296,6 +296,24 @@ async function captureLivePreview(page) {
   } catch (_) {}
 }
 
+async function validateWebmFile(filePath) {
+  const stat = await fsp.stat(filePath);
+  if (!stat.isFile() || stat.size < 1024) {
+    throw new Error(`Recorded WebM is empty or too small (${stat.size} bytes).`);
+  }
+  const handle = await fsp.open(filePath, 'r');
+  try {
+    const header = Buffer.alloc(4);
+    const { bytesRead } = await handle.read(header, 0, 4, 0);
+    if (bytesRead !== 4 || !header.equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
+      throw new Error('Recorded file is not a valid WebM/EBML file.');
+    }
+  } finally {
+    await handle.close().catch(() => {});
+  }
+  return stat.size;
+}
+
 async function recordOneUrl(url, index, runSettings) {
   const b = await ensureBrowser();
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), `pella-webm-${randomUUID()}-`));
@@ -303,6 +321,7 @@ async function recordOneUrl(url, index, runSettings) {
   const localPath = path.resolve(RECORDINGS_DIR, filename);
   let context = null;
   let page = null;
+  let video = null;
 
   try {
     context = await b.newContext({
@@ -314,6 +333,7 @@ async function recordOneUrl(url, index, runSettings) {
     activeContext = context;
     page = await context.newPage();
     activePage = page;
+    video = page.video();
     currentUrl = url;
     currentIndex = index;
     livePreviewBuffer = null;
@@ -351,24 +371,25 @@ async function recordOneUrl(url, index, runSettings) {
       await new Promise(r => setTimeout(r, 200));
     }
   } finally {
+    // Playwright writes/finalizes video only when the browser context closes.
+    // Do not close the page separately or from the Stop endpoint; that can race
+    // with context shutdown and leave a zero-byte WebM.
+    if (context) await context.close().catch(() => {});
     if (page && activePage === page) activePage = null;
     if (context && activeContext === context) activeContext = null;
-    if (page) await page.close().catch(() => {});
-    if (context) await context.close().catch(() => {});
   }
 
-  const names = await fsp.readdir(tempDir);
-  const webmNames = names.filter(n => /\.webm$/i.test(n));
-  if (!webmNames.length) {
+  try {
+    if (!video) throw new Error('Playwright did not create a video object.');
+    await fsp.mkdir(path.dirname(localPath), { recursive: true });
+    await video.saveAs(localPath);
+    const size = await validateWebmFile(localPath);
+    console.log(`Recording saved locally: ${localPath} (${size} bytes, valid WebM)`);
+  } finally {
     await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-    throw new Error('Playwright did not produce a WebM file.');
   }
-  webmNames.sort((a, b) => fs.statSync(path.join(tempDir, b)).mtimeMs - fs.statSync(path.join(tempDir, a)).mtimeMs);
-  await fsp.copyFile(path.join(tempDir, webmNames[0]), localPath);
-  await fsp.rm(tempDir, { recursive: true, force: true }).catch(() => {});
 
   const key = `${B2_PREFIX}${filename}`;
-  console.log(`Recording saved locally: ${localPath}`);
 
   if (b2Configured) {
     await uploadToB2(localPath, key);
@@ -507,17 +528,8 @@ app.post('/api/start', async (req, res) => {
 app.post('/api/stop', async (_req, res) => {
   if (!running) return res.json({ ok: true, stopped: false, message: 'Recorder is not running.' });
   stopRequested = true;
-  console.log('Stop requested from panel. Finalizing the current WebM now and stopping the queue.');
-  // Closing the active page/context immediately makes Playwright finalize the current WebM
-  // instead of waiting for the remaining timer. The recorder loop then sees stopRequested
-  // and does not start the next URL.
-  const page = activePage;
-  const context = activeContext;
-  try {
-    if (page) await page.close().catch(() => {});
-    if (context) await context.close().catch(() => {});
-  } catch (_) {}
-  return res.json({ ok: true, stopped: true, message: 'Stop requested. Current WebM is being finalized and the queue will stop.' });
+  console.log('Stop requested from panel. The current recording will stop at the next safe checkpoint and the WebM will be finalized by browserContext.close().');
+  return res.json({ ok: true, stopped: true, message: 'Stop requested. The current WebM will be finalized and the queue will stop.' });
 });
 
 app.get('/api/urls', (_req, res) => {

@@ -1,6 +1,6 @@
 {
   "name": "pella-render-recorder",
-  "version": "20.8.1",
+  "version": "20.9.0",
   "private": true,
   "description": "Pella Render Recorder optimized for Render with Playwright Chromium installed during build.",
   "main": "index.js",
