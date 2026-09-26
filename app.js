@@ -164,8 +164,18 @@
     message('Wispbyte preset applied: '+p.url+' · '+p.quality+' · '+p.recordSeconds+'s · '+Math.round(p.warmupMs/1000)+'s warmup. Click Start Recording when ready.','ok');
   }
   async function stop(){
-    try{const d=await api('/api/stop',{method:'POST'});message(d.message || (d.stopped?'Stop requested.':'Recorder is not running.'),d.stopped?'ok':'');await refreshStatus();}
-    catch(e){message('Stop failed: '+e.message,'err');}
+    const btn=el('stopBtn');
+    if(state.busy && btn) { btn.disabled=true; }
+    try{
+      message('Stopping recording…');
+      const d=await api('/api/stop',{method:'POST'});
+      message(d.message || (d.stopped?'Stop requested.':'Recorder is not running.'),d.stopped?'ok':'');
+      await refreshStatus();
+    }catch(e){
+      message('Stop failed: '+e.message,'err');
+    }finally{
+      if(btn) btn.disabled=false;
+    }
   }
   async function saveUrls(){
     try{

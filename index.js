@@ -29,7 +29,7 @@ const PAGE_TIMEOUT_MS = Number(process.env.PAGE_TIMEOUT_MS || 60000);
 const PAGE_WARMUP_MS = Number(process.env.PAGE_WARMUP_MS || 3000);
 const AUTO_START = String(process.env.AUTO_START || 'false').toLowerCase() === 'true';
 const DELETE_LOCAL_AFTER_UPLOAD = String(process.env.DELETE_LOCAL_AFTER_UPLOAD || 'false').toLowerCase() === 'true';
-const APP_VERSION = '20.7.0';
+const APP_VERSION = '20.8.1';
 const B2_PREFIX = 'recordings/';
 
 const QUALITY_PRESETS = Object.freeze({
@@ -83,6 +83,8 @@ let settings = loadSettings();
 let browser = null;
 let runPromise = null;
 let stopRequested = false;
+let activePage = null;
+let activeContext = null;
 let running = false;
 let currentUrl = null;
 let currentIndex = null;
@@ -309,7 +311,9 @@ async function recordOneUrl(url, index, runSettings) {
       deviceScaleFactor: 1,
       recordVideo: { dir: tempDir, size: { width: runSettings.width, height: runSettings.height } },
     });
+    activeContext = context;
     page = await context.newPage();
+    activePage = page;
     currentUrl = url;
     currentIndex = index;
     livePreviewBuffer = null;
@@ -347,6 +351,8 @@ async function recordOneUrl(url, index, runSettings) {
       await new Promise(r => setTimeout(r, 200));
     }
   } finally {
+    if (page && activePage === page) activePage = null;
+    if (context && activeContext === context) activeContext = null;
     if (page) await page.close().catch(() => {});
     if (context) await context.close().catch(() => {});
   }
@@ -498,10 +504,20 @@ app.post('/api/start', async (req, res) => {
   }
 });
 
-app.post('/api/stop', (_req, res) => {
+app.post('/api/stop', async (_req, res) => {
   if (!running) return res.json({ ok: true, stopped: false, message: 'Recorder is not running.' });
   stopRequested = true;
-  res.json({ ok: true, stopped: true, message: 'Stop requested. The current page will finalize its WebM, then the queue will stop.' });
+  console.log('Stop requested from panel. Finalizing the current WebM now and stopping the queue.');
+  // Closing the active page/context immediately makes Playwright finalize the current WebM
+  // instead of waiting for the remaining timer. The recorder loop then sees stopRequested
+  // and does not start the next URL.
+  const page = activePage;
+  const context = activeContext;
+  try {
+    if (page) await page.close().catch(() => {});
+    if (context) await context.close().catch(() => {});
+  } catch (_) {}
+  return res.json({ ok: true, stopped: true, message: 'Stop requested. Current WebM is being finalized and the queue will stop.' });
 });
 
 app.get('/api/urls', (_req, res) => {
