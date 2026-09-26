@@ -42,3 +42,6 @@ Health check:
 ```
 
 Render uses `PORT=10000`. The application binds to `0.0.0.0`. The browser is installed at build time, not during recording.
+
+
+Render Node version: 22.23.2 (.node-version).
