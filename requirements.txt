@@ -1,0 +1,2 @@
+# Informational only. This project is Node.js, not Python.
+# Runtime dependencies are installed from package.json with npm install.

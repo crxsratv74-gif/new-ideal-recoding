@@ -1,0 +1,20 @@
+{
+  "name": "pella-render-recorder",
+  "version": "20.7.0",
+  "private": true,
+  "description": "Pella Render Recorder optimized for Render with Playwright Chromium installed during build.",
+  "main": "index.js",
+  "engines": {
+    "node": ">=20 <23"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js",
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.888.0",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "playwright": "^1.55.0"
+  }
+}
